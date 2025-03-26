@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultAddr        = "localhost"
-	defaultPort        = 8080
+	defaultPort        = 8081
 	defaultDBDsn       = "postgres://user:password@localhost:5432/course?sslmode=disable"
 	defaultMigratePath = "migrations"
 )
@@ -41,9 +41,6 @@ func ReadConfig() (*Config, error) {
 	}
 	dbDsn = cmp.Or(os.Getenv("DB_DSN"), dbDsn)
 	migratePath = cmp.Or(os.Getenv("MIGRATE_PATH"), migratePath)
-
-	// dbDsn = "postgres://user:password@localhost:5432/course?sslmode=disable"
-	// migratePath = "user-service/migrations"
 
 	return &Config{
 		Addr:        fmt.Sprintf("%s:%d", host, port),

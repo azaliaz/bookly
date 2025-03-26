@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:13
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d course"]
+      interval: 10s
+      retries: 5
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: course
+    ports:
+      - "5432:5432"
+
+  app:
+    image: bookly-user-service:latest
+    restart: on-failure
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - DB_DSN=postgres://user:password@db:5432/course?sslmode=disable
+      - MIGRATE_PATH=migrations  
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+  app2:
+    image: bookly-book-service:latest
+    restart: on-failure
+    build:
+      context: .
+      dockerfile: book-service/Dockerfile
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8081
+      - DB_DSN=postgres://user:password@db:5432/course?sslmode=disable
+      - MIGRATE_PATH=migrations  
+    ports:
+      - "8081:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+              

@@ -1,9 +1,9 @@
 package storage
 
 import (
-	"github.com/azaliaz/bookly/internal/domain/models"
-	"github.com/azaliaz/bookly/internal/logger"
-	storerrros "github.com/azaliaz/bookly/internal/storage/errros"
+	"github.com/azaliaz/bookly/user-service/internal/domain/models"
+	"github.com/azaliaz/bookly/user-service/internal/logger"
+	storerrros "github.com/azaliaz/bookly/user-service/internal/storage/errors"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )

@@ -5,9 +5,9 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/azaliaz/bookly/internal/domain/models"
-	"github.com/azaliaz/bookly/internal/logger"
-	storerrros "github.com/azaliaz/bookly/internal/storage/errros"
+	"github.com/azaliaz/bookly/user-service/internal/domain/models"
+	"github.com/azaliaz/bookly/user-service/internal/logger"
+	storerrros "github.com/azaliaz/bookly/user-service/internal/storage/errors"
 )
 
 func (s *Server) register(ctx *gin.Context) {
