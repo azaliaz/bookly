@@ -26,6 +26,7 @@ func (ms *MemStorage) SaveBook(book models.Book) error {
         ms.bookStor[memBook.BID] = memBook
         return nil
     }
+    // используем значение из запроса на добавление книги
     bid := uuid.New().String()
     ms.bookStor[bid] = book
     return nil
@@ -67,10 +68,13 @@ func (ms *MemStorage) findBook(value models.Book) (models.Book, error) {
 
 func (ms *MemStorage) DeleteBook(bid string) error {
 	log := logger.Get()
+
+	
 	if _, exists := ms.bookStor[bid]; !exists {
 		log.Warn().Str("bid", bid).Msg("book not found")
 		return storerrros.ErrBookNoExist
 	}
+	
 	delete(ms.bookStor, bid)
 	log.Info().Str("bid", bid).Msg("book deleted successfully")
 
@@ -86,7 +90,7 @@ func (ms *MemStorage) DeleteBook(bid string) error {
 
     if book.Count > 1 {
         book.Count-- 
-		ms.bookStor[bid] = book
+        ms.bookStor[bid] = book
         log.Info().Str("bid", bid).Msg("one instance of the book deleted")
     } else {
         delete(ms.bookStor, bid) 
