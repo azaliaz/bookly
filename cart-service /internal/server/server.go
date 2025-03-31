@@ -3,21 +3,19 @@ package server
 import (
 	"context"
 	"errors"
-	"time"
-	"net/http"
-	"strings" 
-
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
 	"github.com/golang-jwt/jwt/v4"
+	"net/http"
+	"strings"
 
 	"github.com/azaliaz/bookly/book-service/internal/config"
 	"github.com/azaliaz/bookly/book-service/internal/domain/models"
 	"github.com/azaliaz/bookly/book-service/internal/logger"
 )
 
-
-var SecretKey = "VerySecurKey2000Cat" 
+var SecretKey = "VerySecurKey2000Cat"
 
 var ErrInvalidToken = errors.New("invalid token")
 
@@ -35,7 +33,6 @@ type Storage interface {
 	SetDeleteStatus(string) error
 	DeleteBooks(string) error
 	DeleteBook(string) error
-
 }
 
 type Server struct {
@@ -74,13 +71,13 @@ func (s *Server) Run(ctx context.Context) error {
 		books.DELETE("/:id", s.JWTAuthMiddleware(), s.removeBook)
 		books.GET("/", s.JWTAuthMiddleware(), s.allBooks)
 	}
-	router.POST("/add-book", s.JWTAuthMiddleware(), s.addBook)
-	router.POST("/add-books", s.JWTAuthMiddleware(), s.addBooks)
+	router.POST("/add-book", s.JWTAuthRoleMiddleware("admin"), s.addBook)
+	router.POST("/add-books", s.JWTAuthRoleMiddleware("admin"), s.addBooks)
 	router.POST("/book-return", s.JWTAuthMiddleware(), s.bookReturn)
 
 	s.serv.Handler = router
 	log.Debug().Msg("start delete listener")
-	go s.deleter(ctx)
+	// go s.deleter(ctx)
 	log.Info().Str("host", s.serv.Addr).Msg("server started")
 	if err := s.serv.ListenAndServe(); err != nil {
 		return err
@@ -88,74 +85,89 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-
 func (s *Server) Close() error {
 	return s.serv.Shutdown(context.TODO())
 }
 
 func (s *Server) JWTAuthMiddleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		log := logger.Get()
-
-		// Извлечение токена из заголовка Authorization
 		tokenHeader := ctx.GetHeader("Authorization")
 		if tokenHeader == "" {
 			ctx.String(http.StatusUnauthorized, "Authorization header is required")
 			return
 		}
 
-		// Разделение токена по пробелу, ожидаем формат "Bearer <token>"
 		tokenParts := strings.Split(tokenHeader, " ")
 		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
 			ctx.String(http.StatusUnauthorized, "Invalid token format")
 			return
 		}
-		tokenStr := tokenParts[1]
 
-		// Проверка валидности токена
-		UID, err := validToken(tokenStr)
+		UID, Role, err := validToken(tokenParts[1])
 		if err != nil {
-			log.Error().Err(err).Msg("validate jwt failed")
+
 			ctx.String(http.StatusUnauthorized, "Invalid token")
 			return
 		}
 
-		// Сохранение UID пользователя в контексте
 		ctx.Set("uid", UID)
-		// Передача управления следующему обработчику
+		ctx.Set("role", Role)
 		ctx.Next()
 	}
 }
+func (s *Server) JWTAuthRoleMiddleware(roles ...string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		tokenHeader := ctx.GetHeader("Authorization")
+		if tokenHeader == "" {
+			ctx.String(http.StatusUnauthorized, "Authorization header is required")
+			ctx.Abort()
+			return
+		}
 
-func validToken(tokenStr string) (string, error) {
+		tokenParts := strings.Split(tokenHeader, " ")
+		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
+			ctx.String(http.StatusUnauthorized, "Invalid token format")
+			ctx.Abort()
+			return
+		}
+
+		UID, Role, err := validToken(tokenParts[1])
+		if err != nil {
+			ctx.String(http.StatusUnauthorized, "Invalid token")
+			ctx.Abort()
+			return
+		}
+
+		if len(roles) > 0 {
+			isAllowed := false
+			for _, allowedRole := range roles {
+				if Role == allowedRole {
+					isAllowed = true
+					break
+				}
+			}
+			if !isAllowed {
+				ctx.String(http.StatusForbidden, "Access denied")
+				ctx.Abort()
+				return
+			}
+		}
+		fmt.Printf("role: %s\n", Role)
+		ctx.Set("uid", UID)
+		ctx.Set("role", Role)
+		ctx.Next()
+	}
+}
+func validToken(tokenStr string) (string, string, error) {
 	claims := &Claims{}
-	// Разбираем JWT токен и проверяем его
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		fmt.Printf("Parsed Claims - Role: %s, UID: %s\n", claims.Role, claims.UserID)
 		return []byte(SecretKey), nil
 	})
-	if err != nil {
-		return "", err
+	if err != nil || !token.Valid {
+		return "", "", ErrInvalidToken
 	}
+	fmt.Printf("Role %s uid: %s \n", claims.Role, claims.UserID)
 
-	if !token.Valid {
-		return "", ErrInvalidToken
-	}
-	return claims.UserID, nil
+	return claims.UserID, claims.Role, nil
 }
-
-func createJWTToken(uid string) (string, error) {
-	// Создаем новый токен сClaims
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 3)), // Устанавливаем время жизни токена
-		},
-		UserID: uid,
-	})
-	// Подписываем токен
-	tokenStr, err := token.SignedString([]byte(SecretKey))
-	if err != nil {
-		return "", err
-	}
-	return tokenStr, nil
-}
-

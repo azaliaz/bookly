@@ -1,7 +1,7 @@
 package server
 
 import (
-	"context"
+	// "context"
 	"errors"
 	"net/http"
 
@@ -166,32 +166,32 @@ func (s *Server) removeBook(ctx *gin.Context) {
 }
 
 //работает в фоне и выполняет удаление книг, когда канал s.delChan заполняется.
-func (s *Server) deleter(ctx context.Context) {
-	log := logger.Get()
+// func (s *Server) deleter(ctx context.Context) {
+// 	log := logger.Get()
 
-	//в конце работы выводит
-	defer log.Debug().Msg("deleter was ended")
-	for { 
-		//проверка на заверщшение контекста
-		select {
-		case <-ctx.Done(): //если завершен то логируем
-			log.Debug().Msg("deleter context done")
-			return //выходим
-		default:
-			if len(s.delChan) == cap(s.delChan) { //проверяем заполенен ли канал
-				log.Debug().Int("cap", cap(s.delChan)).Int("len", cap(s.delChan)).Msg("start deleting") //логируем начало удаления
-				for i := 0; i < cap(s.delChan); i++ { //очищаем канал чтоб подготовиться к следующему удалению
-					<-s.delChan
-				}
-				if err := s.storage.DeleteBooks(); err != nil { //вызываем удаления книг из хранилища
-					log.Error().Err(err).Msg("deleting books failed") //обработка ошибок
-					s.ErrChan <- err
-					return
-				}
-			}
-		}
-	}
-}
+// 	//в конце работы выводит
+// 	defer log.Debug().Msg("deleter was ended")
+// 	for { 
+// 		//проверка на заверщшение контекста
+// 		select {
+// 		case <-ctx.Done(): //если завершен то логируем
+// 			log.Debug().Msg("deleter context done")
+// 			return //выходим
+// 		default:
+// 			if len(s.delChan) == cap(s.delChan) { //проверяем заполенен ли канал
+// 				log.Debug().Int("cap", cap(s.delChan)).Int("len", cap(s.delChan)).Msg("start deleting") //логируем начало удаления
+// 				for i := 0; i < cap(s.delChan); i++ { //очищаем канал чтоб подготовиться к следующему удалению
+// 					<-s.delChan
+// 				}
+// 				if err := s.storage.DeleteBooks(); err != nil { //вызываем удаления книг из хранилища
+// 					log.Error().Err(err).Msg("deleting books failed") //обработка ошибок
+// 					s.ErrChan <- err
+// 					return
+// 				}
+// 			}
+// 		}
+// 	}
+// }
 
 
 func (s *Server) bookReturn(_ *gin.Context) {}

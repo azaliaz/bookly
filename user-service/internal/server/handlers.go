@@ -2,63 +2,85 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/azaliaz/bookly/user-service/internal/domain/models"
 	"github.com/azaliaz/bookly/user-service/internal/logger"
 	storerrros "github.com/azaliaz/bookly/user-service/internal/storage/errors"
 )
 
+const adminSecretKey = "your-admin-secret-key"
+
+type request struct {
+	Email    string `json:"email" validate:"required,email"`
+	Pass     string `json:"pass" validate:"required,min=8"`
+	Age      int    `json:"age" validate:"required,gte=16"`
+	Role     string `json:"role" validate:"required"`
+	AdminKey string `json:"adminKey"`
+}
+
 func (s *Server) register(ctx *gin.Context) {
-	log := logger.Get()
-	var user models.User
-	if err := ctx.ShouldBindBodyWithJSON(&user); err != nil {
-		log.Error().Err(err).Msg("unmarshal body failed")
+	var req request
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.String(http.StatusBadRequest, "incorrectly entered data")
 		return
 	}
-	if err := s.valid.Struct(user); err != nil {
-		log.Error().Err(err).Msg("validate user failed")
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if req.Role == "" {
+		req.Role = "user"
+	}
+	if req.AdminKey == "your-admin-secret-key" {
+		req.Role = "admin"
+	} else {
+		req.Role = "user"
+	}
+	fmt.Printf("registering role %s\n", req.Role)
+	uuid, err := s.storage.SaveUser(models.User{
+		Email: req.Email,
+		Pass:  req.Pass,
+		Age:   req.Age,
+		Role:  req.Role,
+	}, req.AdminKey)
+
+	if err != nil {
+		ctx.String(http.StatusConflict, "User already exists")
 		return
 	}
-	uuid, err := s.storage.SaveUser(user)
+
+	token, err := createJWTToken(uuid, req.Role)
 	if err != nil {
-		if errors.Is(err, storerrros.ErrUserExists) {
-			log.Error().Msg(err.Error())
-			ctx.String(http.StatusConflict, err.Error())
-			return
-		}
-		log.Error().Err(err).Msg("save user failed")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Debug().Str("uuid", uuid).Send()
-	token, err := createJWTToken(uuid)
-	if err != nil {
-		log.Error().Err(err).Msg("create jwt failed")
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+
 	ctx.Header("Authorization", token)
 	ctx.String(http.StatusCreated, token)
 }
 
 func (s *Server) login(ctx *gin.Context) {
 	log := logger.Get()
-	var user models.User
-	if err := ctx.ShouldBindBodyWithJSON(&user); err != nil {
+	var req request
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		log.Error().Err(err).Msg("unmarshal body failed")
 		ctx.String(http.StatusBadRequest, "incorrectly entered data")
 		return
 	}
-	if err := s.valid.Struct(user); err != nil {
-		log.Error().Err(err).Msg("validate user failed")
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	if req.Role == "" {
+		req.Role = "user"
 	}
-	uuid, err := s.storage.ValidUser(user)
+	if req.AdminKey == "your-admin-secret-key" {
+		req.Role = "admin"
+	} else {
+		req.Role = "user"
+	}
+	uuid, err := s.storage.ValidUser(models.User{
+		Email: req.Email,
+		Pass:  req.Pass,
+		Age:   req.Age,
+		Role:  req.Role,
+	})
 	if err != nil {
 		if errors.Is(err, storerrros.ErrUserNoExist) {
 			log.Error().Err(err).Msg("user not found")
@@ -74,7 +96,7 @@ func (s *Server) login(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	token, err := createJWTToken(uuid)
+	token, err := createJWTToken(uuid, req.Role)
 	if err != nil {
 		log.Error().Err(err).Msg("create jwt failed")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -84,17 +106,17 @@ func (s *Server) login(ctx *gin.Context) {
 	ctx.String(http.StatusOK, "user %s are logined", uuid)
 }
 func (s *Server) userInfo(ctx *gin.Context) {
-	
+
 	log := logger.Get()
 	//извлечение uid
 	uid := ctx.GetString("uid")
-	//получение информации о пользователе 
+	//получение информации о пользователе
 	user, err := s.storage.GetUser(uid)
 
 	//обработка ошибок
 	if err != nil {
 		log.Error().Err(err).Msg("failed get user from db")
-		if errors.Is(err, storerrros.ErrUserNotFound) { //пользователь не найден 
+		if errors.Is(err, storerrros.ErrUserNotFound) { //пользователь не найден
 			ctx.String(http.StatusNotFound, err.Error())
 			return
 		}

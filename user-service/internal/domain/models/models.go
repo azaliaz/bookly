@@ -5,5 +5,5 @@ type User struct {
 	Email string `json:"email" validate:"required,email"`
 	Pass  string `json:"pass" validate:"required,min=8"`
 	Age   int    `json:"age" validate:"required,gte=16"`
-	// Role  string `json:"role" validate:"required,oneof=admin user moderator"`
+	Role  string `json:"role" validate:"required"` 
 }

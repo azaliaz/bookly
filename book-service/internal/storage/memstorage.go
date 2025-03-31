@@ -65,7 +65,7 @@ func (ms *MemStorage) findBook(value models.Book) (models.Book, error) {
 	return models.Book{}, storerrros.ErrBookNoExist
 }
 
-func (ms *MemStorage) DeleteBook(bid string) error {
+func (ms *MemStorage) DeleteBooks(bid string) error {
 	log := logger.Get()
 	if _, exists := ms.bookStor[bid]; !exists {
 		log.Warn().Str("bid", bid).Msg("book not found")

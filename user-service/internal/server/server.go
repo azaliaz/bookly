@@ -3,9 +3,10 @@ package server
 import (
 	"context"
 	"errors"
-	"time"
+	"fmt"
 	"net/http"
-	"strings" 
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
@@ -23,10 +24,11 @@ var ErrInvalidToken = errors.New("invalid token")
 type Claims struct {
 	jwt.RegisteredClaims
 	UserID string
+	Role   string
 }
 
 type Storage interface {
-	SaveUser(models.User) (string, error)
+	SaveUser(models.User, string) (string, error)
 	ValidUser(models.User) (string, error)
 	GetUser(string) (models.User, error)
 }
@@ -63,11 +65,11 @@ func (s *Server) Run(ctx context.Context) error {
 	router.GET("/", func(ctx *gin.Context) { ctx.String(http.StatusOK, "Hello") })
 	users := router.Group("/users")
 	{
-		users.GET("/info", s.JWTAuthMiddleware(), s.userInfo)
+		users.GET("/info", s.JWTAuthRoleMiddleware("admin"), s.userInfo)
 		users.POST("/register", s.register)
 		users.POST("/login", s.login)
 	}
-	
+
 	s.serv.Handler = router
 	log.Debug().Msg("start delete listener")
 	//go s.deleter(ctx)
@@ -84,67 +86,94 @@ func (s *Server) Close() error {
 
 func (s *Server) JWTAuthMiddleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		log := logger.Get()
-
-		// Извлечение токена из заголовка Authorization
 		tokenHeader := ctx.GetHeader("Authorization")
 		if tokenHeader == "" {
 			ctx.String(http.StatusUnauthorized, "Authorization header is required")
 			return
 		}
 
-		// Разделение токена по пробелу, ожидаем формат "Bearer <token>"
 		tokenParts := strings.Split(tokenHeader, " ")
 		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
 			ctx.String(http.StatusUnauthorized, "Invalid token format")
 			return
 		}
-		tokenStr := tokenParts[1]
 
-		// Проверка валидности токена
-		UID, err := validToken(tokenStr)
+		UID, Role, err := validToken(tokenParts[1])
 		if err != nil {
-			log.Error().Err(err).Msg("validate jwt failed")
 			ctx.String(http.StatusUnauthorized, "Invalid token")
 			return
 		}
 
-		// Сохранение UID пользователя в контексте
 		ctx.Set("uid", UID)
-		// Передача управления следующему обработчику
+		ctx.Set("role", Role)
+		ctx.Next()
+	}
+}
+func (s *Server) JWTAuthRoleMiddleware(roles ...string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		tokenHeader := ctx.GetHeader("Authorization")
+		if tokenHeader == "" {
+			ctx.String(http.StatusUnauthorized, "Authorization header is required")
+			ctx.Abort()
+			return
+		}
+
+		tokenParts := strings.Split(tokenHeader, " ")
+		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
+			ctx.String(http.StatusUnauthorized, "Invalid token format")
+			ctx.Abort()
+			return
+		}
+
+		UID, Role, err := validToken(tokenParts[1])
+		if err != nil {
+			ctx.String(http.StatusUnauthorized, "Invalid token")
+			ctx.Abort()
+			return
+		}
+
+		if len(roles) > 0 {
+			isAllowed := false
+			for _, allowedRole := range roles {
+				if Role == allowedRole {
+					isAllowed = true
+					break
+				}
+			}
+			if !isAllowed {
+				ctx.String(http.StatusForbidden, "Access denied")
+				ctx.Abort()
+				return
+			}
+		}
+		fmt.Printf("jwtadmin uid: %s, role: %s\n", UID, Role)
+		ctx.Set("uid", UID)
+		ctx.Set("role", Role)
 		ctx.Next()
 	}
 }
 
-func validToken(tokenStr string) (string, error) {
+func validToken(tokenStr string) (string, string, error) {
 	claims := &Claims{}
-	// Разбираем JWT токен и проверяем его
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		fmt.Printf("Parsed Claims - Role: %s, UID: %s\n", claims.Role, claims.UserID)
 		return []byte(SecretKey), nil
 	})
-	if err != nil {
-		return "", err
+	if err != nil || !token.Valid {
+		return "", "", ErrInvalidToken
 	}
-
-	if !token.Valid {
-		return "", ErrInvalidToken
-	}
-	return claims.UserID, nil
+	fmt.Printf("Claims - Role: %s, UID: %s\n", claims.Role, claims.UserID)
+	return claims.UserID, claims.Role, nil
 }
 
-func createJWTToken(uid string) (string, error) {
-	// Создаем новый токен сClaims
+func createJWTToken(uid, role string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 3)), // Устанавливаем время жизни токена
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 3)),
 		},
 		UserID: uid,
+		Role:   role,
 	})
-	// Подписываем токен
-	tokenStr, err := token.SignedString([]byte(SecretKey))
-	if err != nil {
-		return "", err
-	}
-	return tokenStr, nil
+	fmt.Printf("createjwtToken - Role: %s, UID: %s\n", role, uid)
+	return token.SignedString([]byte(SecretKey))
 }
-

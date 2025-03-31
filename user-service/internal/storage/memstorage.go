@@ -1,11 +1,15 @@
 package storage
 
 import (
+	"fmt"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/google/uuid"
+
 	"github.com/azaliaz/bookly/user-service/internal/domain/models"
 	"github.com/azaliaz/bookly/user-service/internal/logger"
 	storerrros "github.com/azaliaz/bookly/user-service/internal/storage/errors"
-	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type MemStorage struct {
@@ -20,24 +24,42 @@ func New() *MemStorage {
 	}
 }
 
-func (ms *MemStorage) SaveUser(user models.User) (string, error) {
+func (ms *MemStorage) SaveUser(user models.User, adminKey string) (string, error) {
 	log := logger.Get()
 	uuid := uuid.New().String()
+
+	// Проверяем, существует ли пользователь с таким email
 	if _, err := ms.findUser(user.Email); err == nil {
 		return "", storerrros.ErrUserExists
 	}
+
+	// Генерация хеша пароля
 	hash, err := bcrypt.GenerateFromPassword([]byte(user.Pass), bcrypt.DefaultCost)
 	if err != nil {
 		log.Error().Err(err).Msg("save user failed")
 		return "", err
 	}
+
+	// Логирование хеша
 	log.Debug().Str("hash", string(hash)).Send()
+	
 	user.Pass = string(hash)
 	user.UID = uuid
+	
+	if adminKey == "your-admin-secret-key" {
+		fmt.Println("admin")
+		user.Role = "admin"
+	} else if user.Role == "" {
+		user.Role = "user"
+	}
+	
 	ms.usersStor[uuid] = user
+	
 	log.Debug().Any("storage", ms.usersStor).Send()
+
 	return uuid, nil
 }
+
 
 func (ms *MemStorage) ValidUser(user models.User) (string, error) {
 	log := logger.Get()
