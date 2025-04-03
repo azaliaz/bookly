@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/azaliaz/bookly/book-service/internal/config"
-	"github.com/azaliaz/bookly/book-service/internal/domain/models"
-	"github.com/azaliaz/bookly/book-service/internal/logger"
+	"github.com/azaliaz/bookly/cart-service/internal/config"
+	"github.com/azaliaz/bookly/cart-service/internal/domain/models"
+	"github.com/azaliaz/bookly/cart-service/internal/logger"
 )
 
 var SecretKey = "VerySecurKey2000Cat"
@@ -26,13 +26,11 @@ type Claims struct {
 }
 
 type Storage interface {
-	SaveBook(models.Book) error
-	SaveBooks([]models.Book) error
-	GetBooks() ([]models.Book, error)
-	GetBook(string) (models.Book, error)
-	SetDeleteStatus(string) error
-	DeleteBooks(string) error
-	DeleteBook(string) error
+	CreateCart(userID string) (string, error)
+	AddBookToCart(cartID, bookID string, quantity int) error
+	GetCartItems(string) ([]models.CartItem, error)
+	RemoveBookFromCart(string) error
+	ClearCart(string) error
 }
 
 type Server struct {
@@ -64,17 +62,13 @@ func (s *Server) ShutdownServer() error {
 func (s *Server) Run(ctx context.Context) error {
 	log := logger.Get()
 	router := gin.Default()
-	router.GET("/", func(ctx *gin.Context) { ctx.String(http.StatusOK, "Hello") })
-	books := router.Group("/books")
+	cart := router.Group("/cart")
 	{
-		books.GET("/:id", s.JWTAuthMiddleware(), s.bookInfo)
-		books.DELETE("/:id", s.JWTAuthMiddleware(), s.removeBook)
-		books.GET("/", s.JWTAuthMiddleware(), s.allBooks)
+		cart.GET("/:cart_id", s.JWTAuthMiddleware(), s.getCartItems)
+		cart.POST("/add", s.JWTAuthMiddleware(), s.addBookToCart)
+		cart.DELETE("/remove/:itemID", s.JWTAuthMiddleware(), s.removeBookFromCart)
+		cart.DELETE("/clear/:cart_id", s.JWTAuthMiddleware(), s.clearCart)
 	}
-	router.POST("/add-book", s.JWTAuthRoleMiddleware("admin"), s.addBook)
-	router.POST("/add-books", s.JWTAuthRoleMiddleware("admin"), s.addBooks)
-	router.POST("/book-return", s.JWTAuthMiddleware(), s.bookReturn)
-
 	s.serv.Handler = router
 	log.Debug().Msg("start delete listener")
 	// go s.deleter(ctx)

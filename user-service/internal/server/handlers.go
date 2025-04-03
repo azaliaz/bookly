@@ -2,7 +2,7 @@ package server
 
 import (
 	"errors"
-	"fmt"
+	"github.com/google/uuid"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -36,12 +36,13 @@ func (s *Server) register(ctx *gin.Context) {
 	} else {
 		req.Role = "user"
 	}
-	fmt.Printf("registering role %s\n", req.Role)
+	cartID := uuid.New().String()
 	uuid, err := s.storage.SaveUser(models.User{
-		Email: req.Email,
-		Pass:  req.Pass,
-		Age:   req.Age,
-		Role:  req.Role,
+		CartID: cartID,
+		Email:  req.Email,
+		Pass:   req.Pass,
+		Age:    req.Age,
+		Role:   req.Role,
 	}, req.AdminKey)
 
 	if err != nil {
@@ -96,6 +97,26 @@ func (s *Server) login(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	user, err := s.storage.GetUser(uuid)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to retrieve user")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to fetch user details"})
+		return
+	}
+
+	if user.CartID == "" {
+		// Создание новой корзины
+		newCartID := uuid
+		user.CartID = newCartID
+		err := s.storage.UpdateUserCartID(user.UID, newCartID) // Передаем правильный UUID пользователя
+		if err != nil {
+			log.Error().Err(err).Msg("failed to update user with cart ID")
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to create cart"})
+			return
+		}
+	}
+
 	token, err := createJWTToken(uuid, req.Role)
 	if err != nil {
 		log.Error().Err(err).Msg("create jwt failed")

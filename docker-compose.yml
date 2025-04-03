@@ -38,10 +38,28 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8081
       - DB_DSN=postgres://user:password@db:5432/course?sslmode=disable
-      - MIGRATE_PATH=migrations  
+      - MIGRATE_PATH=migrations
     ports:
       - "8081:8081"
     depends_on:
       db:
         condition: service_healthy
-              
+  app3:
+    image: bookly-cart-service:latest
+    restart: on-failure
+    build:
+      context: .
+      dockerfile: cart-service/Dockerfile
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8082
+      - DB_DSN=postgres://user:password@db:5432/course?sslmode=disable
+      - MIGRATE_PATH=migrations
+    ports:
+      - "8082:8082"
+    depends_on:
+      db:
+        condition: service_healthy
+networks:
+  default:
+    driver: bridge

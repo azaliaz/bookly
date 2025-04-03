@@ -31,7 +31,7 @@ func NewDB(ctx context.Context, addr string) (*DBStorage, error) {
 	}, nil
 }
 
-//Метод SaveBook выполняет следующие действия:
+// Метод SaveBook выполняет следующие действия:
 // Ищет книгу в базе данных по ее метке и автору.
 // Если книга не найдена, она добавляется в базу данных с новым уникальным идентификатором.
 // Если книга найдена, увеличивается количество ее экземпляров на 1.
@@ -41,13 +41,13 @@ func (dbs *DBStorage) SaveBook(book models.Book) error {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	//поиск существующей книги 
+	//поиск существующей книги
 	var bid string
 	var count int
 	log.Debug().Msgf("search book %s %s", book.Author, book.Lable)
 	err := dbs.conn.QueryRow(ctx, `SELECT bid, count FROM books 
 		WHERE lable=$1 AND author=$2`, book.Lable, book.Author).Scan(&bid, &count)
-	//обработка ошибки если книга не найдена 	
+	//обработка ошибки если книга не найдена
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			bid := uuid.New().String()
@@ -66,25 +66,25 @@ func (dbs *DBStorage) SaveBook(book models.Book) error {
 	}
 	log.Debug().Int("book count", count).Msg("book count")
 	//обновление количества экземпляров книги
-	_, err = dbs.conn.Exec(ctx, "UPDATE books SET count=count + 1 WHERE bid=$1", bid)
+	_, err = dbs.conn.Exec(ctx, "UPDATE books SET count=count + $1 WHERE bid=$2", count, bid)
 	if err != nil {
-		log.Error().Err(err).Msg("uodate book count failed")
+		log.Error().Err(err).Msg("update book count failed")
 		return err
 	}
 	return nil
 }
-//предназначен для сохранения множества книг в базу данных.
+
+// предназначен для сохранения множества книг в базу данных.
 func (dbs *DBStorage) SaveBooks(books []models.Book) error {
 	log := logger.Get()
 	log.Debug().Any("books", books).Msg("check books")
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
-	defer cancel() 
+	defer cancel()
 	tx, err := dbs.conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) // гарантирует откат транзакции, если метод завершится с ошибкой. Это помогает избежать частичных изменений в базе данных.
-	
+	defer tx.Rollback(ctx)
 	//запрос для поиска книги по метке (lable) и автору (author).
 	_, err = tx.Prepare(ctx, "saveBook", `SELECT bid, count FROM books 
 		WHERE lable=$1 AND author=$2`)
@@ -147,7 +147,7 @@ func (dbs *DBStorage) GetBooks() ([]models.Book, error) {
 	}
 	//чтение данных из результата запроса
 	var books []models.Book //создается пустой срез в который будут добавляться книги
-	for rows.Next() { // цикл перебирает все строки в результате запроса гдк каждая строка представляет собой книгу.
+	for rows.Next() {       // цикл перебирает все строки в результате запроса гдк каждая строка представляет собой книгу.
 		var book models.Book //данные с каждой строки (одна книга)
 		if err := rows.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Count); err != nil {
 			log.Error().Err(err).Msg("failed to scan data from db")
@@ -162,7 +162,7 @@ func (dbs *DBStorage) GetBook(bid string) (models.Book, error) {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	//запрос выбирает одну книга и проверяет не удалена ли она 
+	//запрос выбирает одну книга и проверяет не удалена ли она
 	row := dbs.conn.QueryRow(ctx, `SELECT bid, lable, author, "desc", age, count FROM books WHERE bid = $1 AND deleted=false`, bid)
 	//извлечение данных из результата запроса
 	var book models.Book
@@ -172,7 +172,8 @@ func (dbs *DBStorage) GetBook(bid string) (models.Book, error) {
 	}
 	return book, nil
 }
-//изменение статуса (удаление)
+
+// изменение статуса (удаление)
 func (dbs *DBStorage) SetDeleteStatus(bid string) error {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
@@ -207,13 +208,13 @@ func (dbs *DBStorage) DeleteBooks(bid string) error {
 	log.Info().Str("bid", bid).Msg("book deleted successfully")
 	return nil
 }
+
 // DeleteBook удаляет книгу из базы данных по ее bid.
 func (dbs *DBStorage) DeleteBook(bid string) error {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
 
-	
 	var count int
 	err := dbs.conn.QueryRow(ctx, "SELECT count FROM books WHERE bid = $1", bid).Scan(&count)
 	if err != nil {
@@ -226,7 +227,7 @@ func (dbs *DBStorage) DeleteBook(bid string) error {
 	}
 
 	if count > 1 {
-		
+
 		_, err := dbs.conn.Exec(ctx, "UPDATE books SET count = count - 1 WHERE bid = $1", bid)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to decrement book count")
@@ -234,7 +235,7 @@ func (dbs *DBStorage) DeleteBook(bid string) error {
 		}
 		log.Info().Str("bid", bid).Msg("book count decremented")
 	} else {
-		
+
 		_, err := dbs.conn.Exec(ctx, "DELETE FROM books WHERE bid = $1", bid)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to delete book")
@@ -245,8 +246,6 @@ func (dbs *DBStorage) DeleteBook(bid string) error {
 
 	return nil
 }
-
-
 
 func Migrations(dbDsn string, migrationsPath string) error {
 	log := logger.Get()

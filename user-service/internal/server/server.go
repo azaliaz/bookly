@@ -31,6 +31,7 @@ type Storage interface {
 	SaveUser(models.User, string) (string, error)
 	ValidUser(models.User) (string, error)
 	GetUser(string) (models.User, error)
+	UpdateUserCartID(string, string) error
 }
 
 type Server struct {

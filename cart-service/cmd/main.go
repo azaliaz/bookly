@@ -12,10 +12,10 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"github.com/azaliaz/bookly/book-service/internal/config"
-	"github.com/azaliaz/bookly/book-service/internal/logger"
-	"github.com/azaliaz/bookly/book-service/internal/storage"
-	"github.com/azaliaz/bookly/book-service/internal/server"
+	"github.com/azaliaz/bookly/cart-service/internal/config"
+	"github.com/azaliaz/bookly/cart-service/internal/logger"
+	"github.com/azaliaz/bookly/cart-service/internal/server"
+	"github.com/azaliaz/bookly/cart-service/internal/storage"
 )
 
 func main() {

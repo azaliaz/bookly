@@ -23,6 +23,15 @@ func New() *MemStorage {
 		// bookStor:  make(map[string]models.Book),
 	}
 }
+func (ms *MemStorage) UpdateUserCartID(uid, cartID string) error {
+	user, ok := ms.usersStor[uid]
+	if !ok {
+		return storerrros.ErrUserNotFound
+	}
+	user.CartID = cartID
+	ms.usersStor[uid] = user
+	return nil
+}
 
 func (ms *MemStorage) SaveUser(user models.User, adminKey string) (string, error) {
 	log := logger.Get()
@@ -42,24 +51,23 @@ func (ms *MemStorage) SaveUser(user models.User, adminKey string) (string, error
 
 	// Логирование хеша
 	log.Debug().Str("hash", string(hash)).Send()
-	
+
 	user.Pass = string(hash)
 	user.UID = uuid
-	
+
 	if adminKey == "your-admin-secret-key" {
 		fmt.Println("admin")
 		user.Role = "admin"
 	} else if user.Role == "" {
 		user.Role = "user"
 	}
-	
+
 	ms.usersStor[uuid] = user
-	
+
 	log.Debug().Any("storage", ms.usersStor).Send()
 
 	return uuid, nil
 }
-
 
 func (ms *MemStorage) ValidUser(user models.User) (string, error) {
 	log := logger.Get()

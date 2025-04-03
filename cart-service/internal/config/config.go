@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultAddr        = "localhost"
-	defaultPort        = 8081
+	defaultPort        = 8082
 	defaultDBDsn       = "postgres://user:password@localhost:5432/course?sslmode=disable"
 	defaultMigratePath = "migrations"
 )
