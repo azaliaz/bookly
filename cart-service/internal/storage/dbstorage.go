@@ -117,36 +117,28 @@ func (s *DBStorage) RemoveBookFromCart(itemID string) error {
 	}
 
 	if quantity > 1 {
+
 		_, err := s.conn.Exec(ctx, "UPDATE cart_items SET quantity = quantity - 1 WHERE item_id = $1", itemID)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to decrement book count in cart")
+			log.Error().Err(err).Msg("failed to decrement book quantity in cart")
 			return err
 		}
-
 	} else {
-		_, err = s.conn.Exec(ctx, "DELETE FROM cart_items WHERE item_id = $1", itemID)
 
-		if err != nil {
-			return fmt.Errorf("failed to delete book from cart: %w", err)
-		}
-	}
-	if count == 0 {
 		_, err = s.conn.Exec(ctx, "DELETE FROM cart_items WHERE item_id = $1", itemID)
 		if err != nil {
 			log.Error().Err(err).Str("itemID", itemID).Msg("Failed to delete book from cart")
 			return fmt.Errorf("failed to delete book from cart: %w", err)
 		}
-		log.Debug().Str("itemID", itemID).Msg("Deleted book from cart")
-
-	} else {
-		_, err = s.conn.Exec(ctx, "UPDATE books SET count = count + 1 WHERE bid = $1", bookID)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to update book count in books")
-			return err
-		}
 	}
-	log.Debug().Str("itemID", itemID).Msg("Book removal process completed successfully")
 
+	_, err = s.conn.Exec(ctx, "UPDATE books SET count = count + 1 WHERE bid = $1", bookID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to update book count in books")
+		return err
+	}
+
+	log.Debug().Str("itemID", itemID).Msg("Book removed from cart and returned to books")
 	return nil
 }
 

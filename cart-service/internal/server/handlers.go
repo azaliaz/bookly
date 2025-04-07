@@ -139,7 +139,5 @@ func (s *Server) clearCart(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to clear cart"})
 		return
 	}
-
-	// Возвращаем успешный ответ
 	ctx.JSON(http.StatusOK, gin.H{"message": "cart cleared"})
 }
