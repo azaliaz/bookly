@@ -60,6 +60,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  app4:
+    image: bookly-feedback-service:latest
+    restart: on-failure
+    build:
+      context: .
+      dockerfile: feedback-service/Dockerfile
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8083
+      - DB_DSN=postgres://user:password@db:5432/course?sslmode=disable
+      - MIGRATE_PATH=migrations
+    ports:
+      - "8083:8083"
+    depends_on:
+      db:
+        condition: service_healthy
 networks:
   default:
     driver: bridge

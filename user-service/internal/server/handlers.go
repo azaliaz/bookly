@@ -16,14 +16,20 @@ const adminSecretKey = "your-admin-secret-key"
 
 type request struct {
 	Email    string `json:"email" validate:"required,email"`
+	CartID   string `json:"cart_id" validate:"required,uuid"`
+	Name     string `json:"name"`
+	LastName string `json:"lastname"`
 	Pass     string `json:"pass" validate:"required,min=8"`
 	Age      int    `json:"age" validate:"required,gte=16"`
 	Role     string `json:"role" validate:"required"`
 	AdminKey string `json:"adminKey"`
 }
 
-func (s *Server) register(ctx *gin.Context) {
+func (s *Server) Register(ctx *gin.Context) {
 	var req request
+	log := logger.Get()
+	log.Debug().Any("register req", req).Msg("received register data")
+
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.String(http.StatusBadRequest, "incorrectly entered data")
 		return
@@ -31,26 +37,34 @@ func (s *Server) register(ctx *gin.Context) {
 	if req.Role == "" {
 		req.Role = "user"
 	}
-	if req.AdminKey == "your-admin-secret-key" {
+	if req.AdminKey == adminSecretKey {
 		req.Role = "admin"
 	} else {
 		req.Role = "user"
 	}
 	cartID := uuid.New().String()
+
 	uuid, err := s.storage.SaveUser(models.User{
-		CartID: cartID,
-		Email:  req.Email,
-		Pass:   req.Pass,
-		Age:    req.Age,
-		Role:   req.Role,
+		CartID:   cartID,
+		Email:    req.Email,
+		Name:     req.Name,
+		LastName: req.LastName,
+		Pass:     req.Pass,
+		Age:      req.Age,
+		Role:     req.Role,
 	}, req.AdminKey)
 
 	if err != nil {
 		ctx.String(http.StatusConflict, "User already exists")
 		return
 	}
+	user, err := s.storage.GetUser(uuid)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve user after registration"})
+		return
+	}
+	token, err := createJWTToken(uuid, user.Role)
 
-	token, err := createJWTToken(uuid, req.Role)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -60,7 +74,7 @@ func (s *Server) register(ctx *gin.Context) {
 	ctx.String(http.StatusCreated, token)
 }
 
-func (s *Server) login(ctx *gin.Context) {
+func (s *Server) Login(ctx *gin.Context) {
 	log := logger.Get()
 	var req request
 	if err := ctx.ShouldBindJSON(&req); err != nil {
@@ -77,10 +91,13 @@ func (s *Server) login(ctx *gin.Context) {
 		req.Role = "user"
 	}
 	uuid, err := s.storage.ValidUser(models.User{
-		Email: req.Email,
-		Pass:  req.Pass,
-		Age:   req.Age,
-		Role:  req.Role,
+		CartID:   req.CartID,
+		Email:    req.Email,
+		Name:     req.Name,
+		LastName: req.LastName,
+		Pass:     req.Pass,
+		Age:      req.Age,
+		Role:     req.Role,
 	})
 	if err != nil {
 		if errors.Is(err, storerrros.ErrUserNoExist) {
@@ -106,10 +123,9 @@ func (s *Server) login(ctx *gin.Context) {
 	}
 
 	if user.CartID == "" {
-		// Создание новой корзины
 		newCartID := uuid
 		user.CartID = newCartID
-		err := s.storage.UpdateUserCartID(user.UID, newCartID) // Передаем правильный UUID пользователя
+		err := s.storage.UpdateUserCartID(user.UID, newCartID)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to update user with cart ID")
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to create cart"})
@@ -117,35 +133,30 @@ func (s *Server) login(ctx *gin.Context) {
 		}
 	}
 
-	token, err := createJWTToken(uuid, req.Role)
+	token, err := createJWTToken(uuid, user.Role)
+
 	if err != nil {
 		log.Error().Err(err).Msg("create jwt failed")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.Header("Authorization", token)
-	ctx.String(http.StatusOK, "user %s are logined", uuid)
+	ctx.String(http.StatusOK, token)
 }
-func (s *Server) userInfo(ctx *gin.Context) {
-
+func (s *Server) UserInfo(ctx *gin.Context) {
 	log := logger.Get()
-	//извлечение uid
 	uid := ctx.GetString("uid")
-	//получение информации о пользователе
 	user, err := s.storage.GetUser(uid)
 
-	//обработка ошибок
 	if err != nil {
 		log.Error().Err(err).Msg("failed get user from db")
-		if errors.Is(err, storerrros.ErrUserNotFound) { //пользователь не найден
+		if errors.Is(err, storerrros.ErrUserNotFound) {
 			ctx.String(http.StatusNotFound, err.Error())
 			return
 		}
-		ctx.String(http.StatusInternalServerError, err.Error()) //Если это другая ошибка (например, проблемы с БД)
+		ctx.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	//возвращение данных пользователя
-	ctx.JSON(http.StatusFound, user)
-	//ctx.JSON(http.StatusOK, user)
 
+	ctx.JSON(http.StatusOK, user)
 }

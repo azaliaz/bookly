@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gin-contrib/cors"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/azaliaz/bookly/user-service/internal/logger"
 )
 
+//go:generate mockgen -source=server.go -destination=./mocks/service_mock.go -package=mocks
 var SecretKey = "VerySecurKey2000Cat" //nolint:gochecknoglobals //demo var
 
 var ErrInvalidToken = errors.New("invalid token")
@@ -63,12 +65,21 @@ func (s *Server) ShutdownServer() error {
 func (s *Server) Run(ctx context.Context) error {
 	log := logger.Get()
 	router := gin.Default()
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * 3600,
+	}))
+
 	router.GET("/", func(ctx *gin.Context) { ctx.String(http.StatusOK, "Hello") })
 	users := router.Group("/users")
 	{
-		users.GET("/info", s.JWTAuthRoleMiddleware("admin"), s.userInfo)
-		users.POST("/register", s.register)
-		users.POST("/login", s.login)
+		users.GET("/info", s.JWTAuthMiddleware(), s.UserInfo)
+		users.POST("/register", s.Register)
+		users.POST("/login", s.Login)
 	}
 
 	s.serv.Handler = router
@@ -166,7 +177,6 @@ func validToken(tokenStr string) (string, string, error) {
 	fmt.Printf("Claims - Role: %s, UID: %s\n", claims.Role, claims.UserID)
 	return claims.UserID, claims.Role, nil
 }
-
 func createJWTToken(uid, role string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -175,6 +185,5 @@ func createJWTToken(uid, role string) (string, error) {
 		UserID: uid,
 		Role:   role,
 	})
-	fmt.Printf("createjwtToken - Role: %s, UID: %s\n", role, uid)
 	return token.SignedString([]byte(SecretKey))
 }

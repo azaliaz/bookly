@@ -3,40 +3,13 @@ package server
 import (
 	// "context"
 	"errors"
-	"net/http"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
+	"net/http"
 
 	"github.com/azaliaz/bookly/cart-service/internal/logger"
 	storerrros "github.com/azaliaz/bookly/cart-service/internal/storage/errors"
 )
 
-//	func (s *Server) createCart(ctx *gin.Context) {
-//		log := logger.Get()
-//
-//		// Проверка наличия uid
-//		_, exist := ctx.Get("uid")
-//		if !exist {
-//			log.Error().Msg("user ID not found")
-//			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User ID not found"})
-//			return
-//		}
-//
-//		// Получаем ID пользователя
-//		userID := ctx.Param("user_id")
-//
-//		// Создаем корзину
-//		cartID, err := s.storage.CreateCart(userID)
-//		if err != nil {
-//			log.Error().Err(err).Msg("failed to create cart")
-//			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-//			return
-//		}
-//
-//		// Возвращаем cartID
-//		ctx.JSON(http.StatusCreated, gin.H{"cartID": cartID})
-//	}
 func (s *Server) addBookToCart(ctx *gin.Context) {
 	log := logger.Get()
 
@@ -49,7 +22,6 @@ func (s *Server) addBookToCart(ctx *gin.Context) {
 
 	cartID := ctx.Query("cart_id")
 	bookID := ctx.Query("book_id")
-	quantity := ctx.DefaultQuery("quantity", "1")
 
 	if cartID == "" {
 		log.Error().Msg("cart_id is required")
@@ -61,19 +33,14 @@ func (s *Server) addBookToCart(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "book_id is required"})
 		return
 	}
-	quantityInt, err := strconv.Atoi(quantity)
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid quantity"})
-		return
-	}
 
-	if err := s.storage.AddBookToCart(cartID, bookID, quantityInt); err != nil {
+	if err := s.storage.AddBookToCart(cartID, bookID); err != nil {
 		log.Error().Err(err).Msg("failed to add book to cart")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{"message": "book added to cart"})
+	ctx.JSON(http.StatusOK, gin.H{"message": "Book added to cart"})
 }
 
 func (s *Server) getCartItems(ctx *gin.Context) {

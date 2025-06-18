@@ -28,42 +28,29 @@ func (ms *MemStorage) CreateCart(UID string) (string, error) {
 	ms.carts[cartID] = models.Cart{CartID: cartID, UID: UID}
 	return cartID, nil
 }
-func (ms *MemStorage) AddBookToCart(cartID, BID string, quantity int) error {
-	// Проверяем, есть ли книга в базе
-	book, exists := ms.books[BID]
-	if !exists {
+func (ms *MemStorage) AddBookToCart(cartID, BID string) error {
+	// Проверяем, существует ли книга
+	if _, exists := ms.books[BID]; !exists {
 		return fmt.Errorf("book not found")
 	}
 
-	// Проверяем, есть ли нужное количество
-	if book.Count < quantity {
-		return fmt.Errorf("not enough books in stock")
-	}
-
-	// Уменьшаем количество книг в хранилище
-	book.Count -= quantity
-	ms.books[BID] = book // Обновляем количество книги в хранилище
-
-	// Проверяем, есть ли корзина для данного cartID, если нет - создаем
+	// Создаем корзину, если ее нет
 	if _, exists := ms.carts[cartID]; !exists {
-		ms.carts[cartID] = models.Cart{} // Создаем пустую корзину
+		ms.carts[cartID] = models.Cart{}
 	}
 
-	// Проверяем, есть ли книга в корзине
-	for i, item := range ms.cartItems[cartID] {
+	// Проверяем, есть ли уже такая книга в корзине — если есть, ничего не делаем
+	for _, item := range ms.cartItems[cartID] {
 		if item.BID == BID {
-			// Если книга уже в корзине, увеличиваем количество
-			ms.cartItems[cartID][i].Quantity += quantity
 			return nil
 		}
 	}
 
-	// Если книги в корзине нет, добавляем новую запись
+	// Добавляем книгу в корзину
 	ms.cartItems[cartID] = append(ms.cartItems[cartID], models.CartItem{
-		ItemID:   uuid.New().String(), // Генерируем новый ItemID
-		CartID:   cartID,
-		BID:      BID,
-		Quantity: quantity,
+		ItemID: uuid.New().String(),
+		CartID: cartID,
+		BID:    BID,
 	})
 
 	return nil
@@ -80,13 +67,8 @@ func (ms *MemStorage) RemoveBookFromCart(itemID string) error {
 	for cartID, items := range ms.cartItems {
 		for i, item := range items {
 			if item.ItemID == itemID {
-				// Возвращаем книгу в общий список
-				book := ms.books[item.BID]
-				book.Count += item.Quantity
-				ms.books[item.BID] = book
-
+				// Просто удаляем книгу из корзины
 				ms.cartItems[cartID] = append(items[:i], items[i+1:]...)
-
 				return nil
 			}
 		}

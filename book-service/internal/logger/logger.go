@@ -27,7 +27,13 @@ func Get(flags ...bool) zerolog.Logger {
 			file = short
 			return file + ":" + strconv.Itoa(line)
 		}
-		if flags[0] {
+
+		debugMode := false
+		if len(flags) > 0 && flags[0] {
+			debugMode = true
+		}
+
+		if debugMode {
 			log = zerolog.New(os.Stdout).
 				Level(zerolog.DebugLevel).
 				With().
@@ -36,7 +42,12 @@ func Get(flags ...bool) zerolog.Logger {
 				Logger().
 				Output(zerolog.ConsoleWriter{Out: os.Stderr})
 		} else {
-			log = zerolog.New(os.Stdout).Level(zerolog.InfoLevel).With().Timestamp().Caller().Logger()
+			log = zerolog.New(os.Stdout).
+				Level(zerolog.InfoLevel).
+				With().
+				Timestamp().
+				Caller().
+				Logger()
 		}
 	})
 	return log

@@ -14,13 +14,11 @@ import (
 
 type MemStorage struct {
 	usersStor map[string]models.User
-	// bookStor  map[string]models.Book
 }
 
 func New() *MemStorage {
 	return &MemStorage{
 		usersStor: make(map[string]models.User),
-		// bookStor:  make(map[string]models.Book),
 	}
 }
 func (ms *MemStorage) UpdateUserCartID(uid, cartID string) error {
@@ -37,12 +35,10 @@ func (ms *MemStorage) SaveUser(user models.User, adminKey string) (string, error
 	log := logger.Get()
 	uuid := uuid.New().String()
 
-	// Проверяем, существует ли пользователь с таким email
 	if _, err := ms.findUser(user.Email); err == nil {
 		return "", storerrros.ErrUserExists
 	}
 
-	// Генерация хеша пароля
 	hash, err := bcrypt.GenerateFromPassword([]byte(user.Pass), bcrypt.DefaultCost)
 	if err != nil {
 		log.Error().Err(err).Msg("save user failed")

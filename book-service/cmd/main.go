@@ -2,23 +2,21 @@ package main
 
 import (
 	"context"
+	"github.com/azaliaz/bookly/book-service/internal/config"
+	"github.com/azaliaz/bookly/book-service/internal/logger"
+	"github.com/azaliaz/bookly/book-service/internal/server"
+	"github.com/azaliaz/bookly/book-service/internal/storage"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"golang.org/x/sync/errgroup"
-
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-
-	"github.com/azaliaz/bookly/book-service/internal/config"
-	"github.com/azaliaz/bookly/book-service/internal/logger"
-	"github.com/azaliaz/bookly/book-service/internal/storage"
-	"github.com/azaliaz/bookly/book-service/internal/server"
 )
 
 func main() {
+
 	cfg, err := config.ReadConfig()
 	if err != nil {
 		log.Fatal(err)

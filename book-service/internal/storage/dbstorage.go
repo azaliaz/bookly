@@ -4,152 +4,122 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	// "golang.org/x/crypto/bcrypt"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/google/uuid"
-	// "github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5"
-
-	// "github.com/jackc/pgx/v5/pgconn"
 	"github.com/azaliaz/bookly/book-service/internal/domain/consts"
 	"github.com/azaliaz/bookly/book-service/internal/domain/models"
 	"github.com/azaliaz/bookly/book-service/internal/logger"
+	storerrros "github.com/azaliaz/bookly/book-service/internal/storage/errors"
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
+	"time"
 )
 
 type DBStorage struct {
-	conn *pgx.Conn
+	pool *pgxpool.Pool
 }
 
 func NewDB(ctx context.Context, addr string) (*DBStorage, error) {
-	conn, err := pgx.Connect(ctx, addr)
+	config, err := pgxpool.ParseConfig(addr)
 	if err != nil {
 		return nil, err
 	}
-	return &DBStorage{
-		conn: conn,
-	}, nil
+	config.MaxConns = 20
+	config.MinConns = 2
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 5 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return &DBStorage{pool: pool}, nil
 }
 
-// Метод SaveBook выполняет следующие действия:
-// Ищет книгу в базе данных по ее метке и автору.
-// Если книга не найдена, она добавляется в базу данных с новым уникальным идентификатором.
-// Если книга найдена, увеличивается количество ее экземпляров на 1.
-// В случае возникновения ошибок при работе с базой данных они логируются и возвращаются.
-// В случае успешного завершения метода возвращается nil, что означает отсутствие ошибок.
 func (dbs *DBStorage) SaveBook(book models.Book) error {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	//поиск существующей книги
+
 	var bid string
-	var count int
-	log.Debug().Msgf("search book %s %s", book.Author, book.Lable)
-	err := dbs.conn.QueryRow(ctx, `SELECT bid, count FROM books 
-		WHERE lable=$1 AND author=$2`, book.Lable, book.Author).Scan(&bid, &count)
-	//обработка ошибки если книга не найдена
+	err := dbs.pool.QueryRow(ctx, `SELECT bid FROM books WHERE lable=$1 AND author=$2`, book.Lable, book.Author).Scan(&bid)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			bid := uuid.New().String()
-			_, err := dbs.conn.Exec(ctx,
-				`INSERT INTO books (bid, lable, author, "desc", age, count) 
-				VALUES ($1, $2, $3, $4, $5, $6)`,
-				bid, book.Lable, book.Author, book.Desc, book.Age, book.Count)
+			_, err := dbs.pool.Exec(ctx,
+				`INSERT INTO books (bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				bid, book.Lable, book.Author, book.Desc, book.Age, book.Genre, book.Rating, book.CoverURL, book.PDFURL)
 			if err != nil {
 				log.Error().Err(err).Msg("save book failed")
-				return nil
+				return err
 			}
 			return nil
 		}
-		log.Error().Err(err).Msg("get book count failed")
+		log.Error().Err(err).Msg("get book failed")
 		return err
 	}
-	log.Debug().Int("book count", count).Msg("book count")
-	//обновление количества экземпляров книги
-	_, err = dbs.conn.Exec(ctx, "UPDATE books SET count=count + $1 WHERE bid=$2", count, bid)
-	if err != nil {
-		log.Error().Err(err).Msg("update book count failed")
-		return err
-	}
+	log.Debug().Str("bid", bid).Msg("book already exists")
 	return nil
 }
 
-// предназначен для сохранения множества книг в базу данных.
 func (dbs *DBStorage) SaveBooks(books []models.Book) error {
 	log := logger.Get()
-	log.Debug().Any("books", books).Msg("check books")
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	tx, err := dbs.conn.Begin(ctx)
+
+	tx, err := dbs.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
-	//запрос для поиска книги по метке (lable) и автору (author).
-	_, err = tx.Prepare(ctx, "saveBook", `SELECT bid, count FROM books 
-		WHERE lable=$1 AND author=$2`)
-	if err != nil {
-		log.Error().Err(err).Msg("prepare save book req failed")
-		return err
-	}
-	//запрос для вставки новой книги в таблицу.
-	_, err = tx.Prepare(ctx, "insertBook", `INSERT INTO books (bid, lable, author, "desc", age, count) 
-				VALUES ($1, $2, $3, $4, $5, $6)`)
-	if err != nil {
-		log.Error().Err(err).Msg("prepare insert book req failed")
-		return err
-	}
-	// запрос для обновления количества экземпляров книги.
-	_, err = tx.Prepare(ctx, "updateBook", `UPDATE books SET count=count + 1 WHERE bid=$1`)
-	if err != nil {
-		log.Error().Err(err).Msg("prepare update book req failed")
-		return err
-	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		} else {
+			_ = tx.Commit(ctx)
+		}
+	}()
+
 	for _, book := range books {
 		var bid string
-		var count int
-		log.Debug().Msgf("search book %s %s", book.Author, book.Lable)
-		err := tx.QueryRow(ctx, "saveBook", book.Lable, book.Author).Scan(&bid, &count)
+		err = tx.QueryRow(ctx, `SELECT bid FROM books WHERE lable = $1 AND author = $2`, book.Lable, book.Author).Scan(&bid)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				bid := uuid.New().String()
-				count := 1
-				_, err := tx.Exec(ctx, `insertBook`,
-					bid, book.Lable, book.Author, book.Desc, book.Age, count)
+				_, err = tx.Exec(ctx,
+					`INSERT INTO books (bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url) 
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+					bid, book.Lable, book.Author, book.Desc, book.Age, book.Genre, book.Rating, book.CoverURL, book.PDFURL)
 				if err != nil {
-					log.Error().Err(err).Msg("save book failed")
-					return nil
+					log.Error().Err(err).Msg("insert book failed")
+					return err
 				}
 				continue
 			}
-			log.Error().Err(err).Msg("get book count failed")
+			log.Error().Err(err).Msg("check book failed")
 			return err
 		}
-		log.Debug().Int("book count", count).Msg("book count")
-		_, err = tx.Exec(ctx, "updateBook", bid)
-		if err != nil {
-			log.Error().Err(err).Msg("uodate book count failed")
-			return err
-		}
+		log.Debug().Str("bid", bid).Msg("book already exists")
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (dbs *DBStorage) GetBooks() ([]models.Book, error) {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	//запрос к базе данных выбирает все книги из таблицы books, которые не помечены как удаленные
-	rows, err := dbs.conn.Query(ctx, `SELECT bid, lable, author, "desc", age, count FROM books WHERE deleted=false`)
+	rows, err := dbs.pool.Query(ctx, `SELECT bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url FROM books`)
 	if err != nil {
 		log.Error().Err(err).Msg("failed get all books from db")
 		return nil, err
 	}
-	//чтение данных из результата запроса
-	var books []models.Book //создается пустой срез в который будут добавляться книги
-	for rows.Next() {       // цикл перебирает все строки в результате запроса гдк каждая строка представляет собой книгу.
-		var book models.Book //данные с каждой строки (одна книга)
-		if err := rows.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Count); err != nil {
+	defer rows.Close()
+
+	var books []models.Book
+	for rows.Next() {
+		var book models.Book
+		if err := rows.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Genre, &book.Rating, &book.CoverURL, &book.PDFURL); err != nil {
 			log.Error().Err(err).Msg("failed to scan data from db")
 			return nil, err
 		}
@@ -162,89 +132,172 @@ func (dbs *DBStorage) GetBook(bid string) (models.Book, error) {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	//запрос выбирает одну книга и проверяет не удалена ли она
-	row := dbs.conn.QueryRow(ctx, `SELECT bid, lable, author, "desc", age, count FROM books WHERE bid = $1 AND deleted=false`, bid)
-	//извлечение данных из результата запроса
+	row := dbs.pool.QueryRow(ctx, `SELECT bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url FROM books WHERE bid = $1`, bid)
+
 	var book models.Book
-	if err := row.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Count); err != nil {
+	if err := row.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Genre, &book.Rating, &book.CoverURL, &book.PDFURL); err != nil {
 		log.Error().Err(err).Msg("failed to scan data from db")
 		return models.Book{}, err
 	}
 	return book, nil
 }
 
-// изменение статуса (удаление)
-func (dbs *DBStorage) SetDeleteStatus(bid string) error {
-	log := logger.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
-	defer cancel()
-	//выполнение запроса на обновление записи
-	_, err := dbs.conn.Exec(ctx, "UPDATE books SET deleted=true WHERE bid=$1", bid)
-	if err != nil {
-		log.Error().Msg("set deleted status failed")
-		return err
-	}
-	return nil
-}
-
-func (dbs *DBStorage) DeleteBooks(bid string) error {
-	log := logger.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
-	defer cancel()
-
-	// Удаляем книгу по идентификатору bid
-	res, err := dbs.conn.Exec(ctx, "DELETE FROM books WHERE bid = $1", bid)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to delete book")
-		return err
-	}
-
-	// Проверяем, была ли удалена хотя бы одна строка
-	if res.RowsAffected() == 0 {
-		log.Warn().Str("bid", bid).Msg("book not found")
-		return errors.New("book not found")
-	}
-
-	log.Info().Str("bid", bid).Msg("book deleted successfully")
-	return nil
-}
-
-// DeleteBook удаляет книгу из базы данных по ее bid.
 func (dbs *DBStorage) DeleteBook(bid string) error {
 	log := logger.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
 
-	var count int
-	err := dbs.conn.QueryRow(ctx, "SELECT count FROM books WHERE bid = $1", bid).Scan(&count)
+	res, err := dbs.pool.Exec(ctx, "DELETE FROM books WHERE bid = $1", bid)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			log.Warn().Str("bid", bid).Msg("book not found")
-			return errors.New("book not found")
-		}
-		log.Error().Err(err).Msg("failed to fetch book count")
+		log.Error().Err(err).Msg("failed to delete book")
 		return err
 	}
+	if res.RowsAffected() == 0 {
+		log.Warn().Str("bid", bid).Msg("book not found")
+		return errors.New("book not found")
+	}
+	log.Info().Str("bid", bid).Msg("book deleted successfully")
+	return nil
+}
 
-	if count > 1 {
+//	func (dbs *DBStorage) GetBooksWithSearchAndSort(searchTerm string, sortBy string, ascending bool) ([]models.Book, error) {
+//		log := logger.Get()
+//		ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
+//		defer cancel()
+//
+//		var orderDirection string
+//		if ascending {
+//			orderDirection = "ASC"
+//		} else {
+//			orderDirection = "DESC"
+//		}
+//
+//		baseQuery := `SELECT bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url FROM books`
+//		searchQuery := ""
+//		args := []interface{}{}
+//
+//		if searchTerm != "" {
+//			searchQuery = ` WHERE lable ILIKE $1 OR author ILIKE $1`
+//			args = append(args, "%"+searchTerm+"%")
+//		}
+//
+//		var sortQuery string
+//		switch sortBy {
+//		case "lable":
+//			sortQuery = ` ORDER BY lable ` + orderDirection
+//		case "author":
+//			sortQuery = ` ORDER BY author ` + orderDirection
+//		case "rating":
+//			sortQuery = ` ORDER BY rating ` + orderDirection
+//		default:
+//			sortQuery = ` ORDER BY bid ` + orderDirection
+//		}
+//
+//		fullQuery := baseQuery + searchQuery + sortQuery
+//
+//		rows, err := dbs.pool.Query(ctx, fullQuery, args...)
+//		if err != nil {
+//			log.Error().Err(err).Msg("failed to get books from db")
+//			return nil, err
+//		}
+//		defer rows.Close()
+//
+//		var books []models.Book
+//		for rows.Next() {
+//			var book models.Book
+//			if err := rows.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Genre, &book.Rating, &book.CoverURL, &book.PDFURL); err != nil {
+//				log.Error().Err(err).Msg("failed to scan data from db")
+//				return nil, err
+//			}
+//			books = append(books, book)
+//		}
+//		return books, nil
+//	}
 
-		_, err := dbs.conn.Exec(ctx, "UPDATE books SET count = count - 1 WHERE bid = $1", bid)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to decrement book count")
-			return err
-		}
-		log.Info().Str("bid", bid).Msg("book count decremented")
+func (dbs *DBStorage) GetBooksWithFilters(searchTerm string, genres []string, year string, sortBy string, ascending bool) ([]models.Book, error) {
+	log := logger.Get()
+	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
+	defer cancel()
+
+	var orderDirection string
+	if ascending {
+		orderDirection = "ASC"
 	} else {
-
-		_, err := dbs.conn.Exec(ctx, "DELETE FROM books WHERE bid = $1", bid)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to delete book")
-			return err
-		}
-		log.Info().Str("bid", bid).Msg("book deleted successfully")
+		orderDirection = "DESC"
 	}
 
-	return nil
+	baseQuery := `SELECT bid, lable, author, "desc", age, genre, rating, cover_url, pdf_url FROM books`
+	var conditions []string
+	var args []interface{}
+	argPos := 1
+
+	if searchTerm != "" {
+		conditions = append(conditions, fmt.Sprintf("(lable ILIKE $%d OR author ILIKE $%d)", argPos, argPos+1))
+		args = append(args, "%"+searchTerm+"%", "%"+searchTerm+"%")
+		argPos += 2
+	}
+
+	if len(genres) > 0 {
+		var genreConds []string
+		for _, g := range genres {
+			genreConds = append(genreConds, fmt.Sprintf("genre ILIKE $%d", argPos))
+			args = append(args, "%"+g+"%")
+			argPos++
+		}
+		conditions = append(conditions, "("+strings.Join(genreConds, " OR ")+")")
+	}
+
+	if year != "" {
+		conditions = append(conditions, fmt.Sprintf("age = $%d", argPos))
+		args = append(args, year)
+		argPos++
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var sortQuery string
+	switch sortBy {
+	case "lable":
+		sortQuery = ` ORDER BY lable ` + orderDirection
+	case "author":
+		sortQuery = ` ORDER BY author ` + orderDirection
+	case "rating":
+		sortQuery = ` ORDER BY rating ` + orderDirection
+	case "genre":
+		sortQuery = ` ORDER BY genre ` + orderDirection
+	case "age":
+		sortQuery = ` ORDER BY age ` + orderDirection
+	default:
+		sortQuery = ` ORDER BY bid ` + orderDirection
+	}
+
+	fullQuery := baseQuery + whereClause + sortQuery
+
+	rows, err := dbs.pool.Query(ctx, fullQuery, args...)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get books from db")
+		return nil, err
+	}
+	defer rows.Close()
+
+	var books []models.Book
+	for rows.Next() {
+		var book models.Book
+		if err := rows.Scan(&book.BID, &book.Lable, &book.Author, &book.Desc, &book.Age, &book.Genre, &book.Rating, &book.CoverURL, &book.PDFURL); err != nil {
+			log.Error().Err(err).Msg("failed to scan data from db")
+			return nil, err
+		}
+		books = append(books, book)
+	}
+
+	if len(books) == 0 {
+		return nil, storerrros.ErrEmptyBooksList
+	}
+
+	return books, nil
 }
 
 func Migrations(dbDsn string, migrationsPath string) error {
@@ -256,11 +309,11 @@ func Migrations(dbDsn string, migrationsPath string) error {
 	}
 	if err := m.Up(); err != nil {
 		if errors.Is(err, migrate.ErrNoChange) {
-			log.Info().Msg("no mirations apply")
+			log.Info().Msg("no migrations apply")
 			return nil
 		}
 		return err
 	}
-	log.Info().Msg("all mirations apply")
+	log.Info().Msg("all migrations apply")
 	return nil
 }

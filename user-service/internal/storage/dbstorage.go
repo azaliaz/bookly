@@ -31,7 +31,6 @@ func NewDB(ctx context.Context, addr string) (*DBStorage, error) {
 	}, nil
 }
 
-// Метод для обновления CartID у пользователя
 func (dbs *DBStorage) UpdateUserCartID(uid, cartID string) error {
 	log := logger.Get()
 	_, err := dbs.conn.Exec(context.Background(), "UPDATE users SET cart_id = $1 WHERE uid = $2", cartID, uid)
@@ -68,19 +67,19 @@ func (dbs *DBStorage) SaveUser(user models.User, adminKey string) (string, error
 		user.Role = "user"
 	}
 
-	_, err = dbs.conn.Exec(context.Background(), "INSERT INTO users (uid, cart_id, email, pass, age, role) VALUES ($1, $2, $3, $4, $5, $6)",
-		userUUID, cartUUID, user.Email, user.Pass, user.Age, user.Role)
+	_, err = dbs.conn.Exec(context.Background(), "INSERT INTO users (uid, cart_id, email, name, lastname, pass, age, role) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+		userUUID, cartUUID, user.Email, user.Name, user.LastName, user.Pass, user.Age, user.Role)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to insert user")
 		return "", err
 	}
 
-	// Создаем корзину для пользователя
 	_, err = dbs.conn.Exec(context.Background(), "INSERT INTO cart (cart_id, user_id) VALUES ($1, $2)", cartUUID, userUUID)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create cart")
 		return "", err
 	}
+	log.Debug().Any("user to insert", user).Msg("about to save user")
 
 	return userUUID, nil
 }
@@ -90,8 +89,8 @@ func (dbs *DBStorage) ValidUser(user models.User) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
 	var usr models.User
-	row := dbs.conn.QueryRow(ctx, "SELECT uid, cart_id, email, pass, age, role FROM users WHERE email = $1", user.Email)
-	if err := row.Scan(&usr.UID, &usr.CartID, &usr.Email, &usr.Pass, &usr.Age, &usr.Role); err != nil {
+	row := dbs.conn.QueryRow(ctx, "SELECT uid, cart_id, email, name, lastname, pass, age, role FROM users WHERE email = $1", user.Email)
+	if err := row.Scan(&usr.UID, &usr.CartID, &usr.Email, &usr.Name, &usr.LastName, &usr.Pass, &usr.Age, &usr.Role); err != nil {
 		log.Error().Err(err).Msg("failed scan db data")
 		return "", err
 	}
@@ -109,14 +108,13 @@ func (dbs *DBStorage) GetUser(uid string) (models.User, error) {
 	//контекст с тайм-аутом будет использован для выполнения запроса к бд
 	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
 	defer cancel()
-	row := dbs.conn.QueryRow(ctx, "SELECT uid, cart_id, email, pass, age, role FROM users WHERE uid = $1", uid)
+	row := dbs.conn.QueryRow(ctx, "SELECT uid, cart_id, email, name, lastname, pass, age, role FROM users WHERE uid = $1", uid)
 	var usr models.User
-	if err := row.Scan(&usr.UID, &usr.CartID, &usr.Email, &usr.Pass, &usr.Age, &usr.Role); err != nil {
+	if err := row.Scan(&usr.UID, &usr.CartID, &usr.Email, &usr.Name, &usr.LastName, &usr.Pass, &usr.Age, &usr.Role); err != nil {
 		log.Error().Err(err).Msg("failed scan db data")
 		return models.User{}, err
 	}
 
-	//логирование успешного результата
 	log.Debug().Any("db user", usr).Msg("user form data base")
 	return usr, nil
 }

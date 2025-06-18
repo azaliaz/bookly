@@ -3,28 +3,43 @@ package server
 import (
 	// "context"
 	"errors"
-	"net/http"
-
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 
 	"github.com/azaliaz/bookly/book-service/internal/domain/models"
 	"github.com/azaliaz/bookly/book-service/internal/logger"
 	storerrros "github.com/azaliaz/bookly/book-service/internal/storage/errors"
 )
 
-// получение списка всех книг из хранилища и возврат их клиенту в формате JSON.
-func (s *Server) allBooks(ctx *gin.Context) {
-	log := logger.Get()
-	//проверка наличия идентификатора пользователя
-	_, exist := ctx.Get("uid") //проверяет есть ли uid в контексте запроса
-	if !exist {                //если не найден
-		log.Error().Msg("user ID not found") //логируется ошиька
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User ID not found"})
-		//ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+func (s *Server) AllBooksWithSearch(ctx *gin.Context) {
+	searchQuery := ctx.DefaultQuery("search", "")
+	genres := ctx.QueryArray("genre")
+	yearFilter := ctx.DefaultQuery("year", "")
+	sortBy := ctx.DefaultQuery("sort_by", "rating")
+	ascending := ctx.DefaultQuery("ascending", "true") == "true"
+
+	books, err := s.Storage.GetBooksWithFilters(searchQuery, genres, yearFilter, sortBy, ascending)
+	if err != nil {
+		if errors.Is(err, storerrros.ErrEmptyBooksList) {
+			ctx.String(http.StatusNotFound, err.Error())
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	//получение списка книг
-	books, err := s.storage.GetBooks() //достает список книг из бд
+
+	ctx.JSON(http.StatusOK, books)
+}
+
+// получение списка всех книг из хранилища и возврат их клиенту в формате JSON.
+func (s *Server) AllBooks(ctx *gin.Context) {
+
+	books, err := s.Storage.GetBooks() //достает список книг из бд
 	if err != nil {                    //если произошла ошибка
 		if errors.Is(err, storerrros.ErrEmptyBooksList) {
 			ctx.String(http.StatusNotFound, err.Error())
@@ -33,38 +48,27 @@ func (s *Server) allBooks(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	//возвращение списка книг
+
 	ctx.JSON(http.StatusOK, books)
 }
 
-// получение инфорамции о конкретной книге
-func (s *Server) bookInfo(ctx *gin.Context) {
-	log := logger.Get()
-	//проверка налия uid
-	_, exist := ctx.Get("uid")
-	if !exist {
-		log.Error().Msg("user ID not found")
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User ID not found"})
-		return
-	}
-	id := ctx.Param("id")              //получение id книги из параметров запроса
-	book, err := s.storage.GetBook(id) //получение книги из хранилища
+func (s *Server) BookInfo(ctx *gin.Context) {
+	id := ctx.Param("id")
+	book, err := s.Storage.GetBook(id)
 	if err != nil {
-		if errors.Is(err, storerrros.ErrBookNoExist) { //Если книги нет
+		if errors.Is(err, storerrros.ErrBookNoExist) {
 			ctx.String(http.StatusNotFound, err.Error())
 			return
-		} //Иначе
+		}
 		ctx.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	ctx.JSON(http.StatusFound, book)
+	ctx.JSON(http.StatusOK, book)
 }
 
-// обработчик API позволяет пользователю добавить новую книгу в хранилище.
-func (s *Server) addBook(ctx *gin.Context) {
+func (s *Server) AddBook(ctx *gin.Context) {
 	log := logger.Get()
 
-	//проверка налия идентификатора пользователя
 	_, exist := ctx.Get("uid")
 	if !exist {
 		log.Error().Msg("user ID not found")
@@ -72,69 +76,119 @@ func (s *Server) addBook(ctx *gin.Context) {
 		return
 	}
 
-	//извлечение данных о книге из тела запроса
-	var book models.Book
-	if err := ctx.ShouldBindBodyWithJSON(&book); err != nil {
-		log.Error().Err(err).Msg("unmarshal body failed")
-		ctx.String(http.StatusBadRequest, "incorrectly entered data")
+	if err := ctx.Request.ParseMultipartForm(10 << 20); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse multipart form"})
 		return
 	}
-	if book.Count == 0 {
-		book.Count = 1
+
+	form := ctx.Request.MultipartForm
+	requiredFields := []string{"lable", "author", "desc", "genre", "age"}
+	for _, field := range requiredFields {
+		if len(form.Value[field]) == 0 || form.Value[field][0] == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "missing or empty field: " + field})
+			return
+		}
 	}
-	if err := s.storage.SaveBook(book); err != nil {
-		log.Error().Err(err).Msg("save user failed")
+
+	age, err := strconv.Atoi(form.Value["age"][0])
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid age value"})
+		return
+	}
+
+	book := models.Book{
+		Lable:  form.Value["lable"][0],
+		Author: form.Value["author"][0],
+		Desc:   form.Value["desc"][0],
+		Genre:  form.Value["genre"][0],
+		Age:    age,
+	}
+
+	age, _ = strconv.Atoi(form.Value["age"][0])
+	book.Age = age
+
+	if val, ok := form.Value["rating"]; ok && len(val) > 0 && val[0] != "" {
+		rating, err := strconv.Atoi(val[0])
+		if err != nil {
+			log.Error().Err(err).Msg("invalid rating value")
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid rating value"})
+			return
+		}
+		book.Rating = rating
+	} else {
+		book.Rating = 0
+	}
+
+	coverFile, coverHeader, err := ctx.Request.FormFile("cover")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get cover file")
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to get cover file"})
+		return
+	}
+	defer coverFile.Close()
+
+	coverPath := "uploads/covers/" + uuid.New().String() + "_" + coverHeader.Filename
+	if err := os.MkdirAll(filepath.Dir(coverPath), os.ModePerm); err != nil {
+		log.Error().Err(err).Msg("failed to create cover directory")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create cover directory"})
+		return
+	}
+
+	out, err := os.Create(coverPath)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create cover file")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create cover file"})
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, coverFile); err != nil {
+		log.Error().Err(err).Msg("failed to write cover file")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write cover file"})
+		return
+	}
+	book.CoverURL = "/" + coverPath
+
+	pdfFile, pdfHeader, err := ctx.Request.FormFile("pdf")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get pdf file")
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to get pdf file"})
+		return
+	}
+	defer pdfFile.Close()
+
+	pdfPath := "uploads/pdfs/" + uuid.New().String() + "_" + pdfHeader.Filename
+	if err := os.MkdirAll(filepath.Dir(pdfPath), os.ModePerm); err != nil {
+		log.Error().Err(err).Msg("failed to create pdf directory")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create pdf directory"})
+		return
+	}
+
+	out, err = os.Create(pdfPath)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create pdf file")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create pdf file"})
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, pdfFile); err != nil {
+		log.Error().Err(err).Msg("failed to write pdf file")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write pdf file"})
+		return
+	}
+	book.PDFURL = "/" + pdfPath
+
+	if err := s.Storage.SaveBook(book); err != nil {
+		log.Error().Err(err).Msg("save book failed")
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
 	ctx.String(http.StatusOK, "book %s %s was added", book.Author, book.Lable)
 }
 
-// обработчик API позволяет пользователю добавить несколько книг в хранилище
-func (s *Server) addBooks(ctx *gin.Context) {
-	log := logger.Get()
-	_, exist := ctx.Get("uid")
-	if !exist {
-		log.Error().Msg("user ID not found")
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User ID not found"})
-		return
-	}
-	var books []models.Book
-	if err := ctx.ShouldBindBodyWithJSON(&books); err != nil {
-		log.Error().Err(err).Msg("unmarshal body failed")
-		ctx.String(http.StatusBadRequest, "incorrectly entered data")
-		return
-	}
-	if err := s.storage.SaveBooks(books); err != nil {
-		log.Error().Err(err).Msg("save user failed")
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	ctx.String(http.StatusOK, "%s books was added", len(books))
-}
-
-//	func (s *Server) removeBook(ctx *gin.Context) {
-//		log := logger.Get()
-//		_, exist := ctx.Get("uid")
-//		if !exist {
-//			log.Error().Msg("user ID not found")
-//			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User ID not found"})
-//			return
-//		}
-//		id := ctx.Param("id")
-//		if err := s.storage.SetDeleteStatus(id); err != nil {
-//			log.Error().Msg("user ID not found")
-//			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "User ID not found"})
-//			return
-//		}
-//		s.delChan <- struct{}{}
-//		log.Debug().Int("chan len", len(s.delChan)).Msg("book send into delChan")
-//		ctx.String(http.StatusOK, "book "+id+" was deleted")
-//	}
-func (s *Server) removeBook(ctx *gin.Context) {
+func (s *Server) RemoveBook(ctx *gin.Context) {
 	log := logger.Get()
 
-	// Проверка наличия uid
 	_, exist := ctx.Get("uid")
 	if !exist {
 		log.Error().Msg("user ID not found")
@@ -142,15 +196,13 @@ func (s *Server) removeBook(ctx *gin.Context) {
 		return
 	}
 
-	// Получаем идентификатор книги из параметра запроса
 	id := ctx.Param("id")
 	if id == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "missing book ID"})
 		return
 	}
 
-	// Вызываем метод удаления книги
-	if err := s.storage.DeleteBook(id); err != nil {
+	if err := s.Storage.DeleteBook(id); err != nil {
 		if err.Error() == "book not found" {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "book not found"})
 			return
@@ -160,36 +212,5 @@ func (s *Server) removeBook(ctx *gin.Context) {
 		return
 	}
 
-	// Возвращаем успешный ответ
 	ctx.JSON(http.StatusOK, gin.H{"message": "book deleted"})
 }
-
-//работает в фоне и выполняет удаление книг, когда канал s.delChan заполняется.
-// func (s *Server) deleter(ctx context.Context) {
-// 	log := logger.Get()
-
-// 	//в конце работы выводит
-// 	defer log.Debug().Msg("deleter was ended")
-// 	for {
-// 		//проверка на заверщшение контекста
-// 		select {
-// 		case <-ctx.Done(): //если завершен то логируем
-// 			log.Debug().Msg("deleter context done")
-// 			return //выходим
-// 		default:
-// 			if len(s.delChan) == cap(s.delChan) { //проверяем заполенен ли канал
-// 				log.Debug().Int("cap", cap(s.delChan)).Int("len", cap(s.delChan)).Msg("start deleting") //логируем начало удаления
-// 				for i := 0; i < cap(s.delChan); i++ { //очищаем канал чтоб подготовиться к следующему удалению
-// 					<-s.delChan
-// 				}
-// 				if err := s.storage.DeleteBooks(); err != nil { //вызываем удаления книг из хранилища
-// 					log.Error().Err(err).Msg("deleting books failed") //обработка ошибок
-// 					s.ErrChan <- err
-// 					return
-// 				}
-// 			}
-// 		}
-// 	}
-// }
-
-func (s *Server) bookReturn(_ *gin.Context) {}

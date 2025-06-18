@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
 	"github.com/golang-jwt/jwt/v4"
@@ -15,6 +16,7 @@ import (
 	"github.com/azaliaz/bookly/book-service/internal/logger"
 )
 
+//go:generate mockgen -source=server.go -destination=./mocks/service_mock.go -package=mocks
 var SecretKey = "VerySecurKey2000Cat"
 
 var ErrInvalidToken = errors.New("invalid token")
@@ -30,15 +32,15 @@ type Storage interface {
 	SaveBooks([]models.Book) error
 	GetBooks() ([]models.Book, error)
 	GetBook(string) (models.Book, error)
-	SetDeleteStatus(string) error
-	DeleteBooks(string) error
 	DeleteBook(string) error
+	//GetBooksWithSearchAndSort(searchTerm, genre, year, sortBy string, ascending bool) ([]models.Book, error)
+	GetBooksWithFilters(searchTerm string, genres []string, year string, sortBy string, ascending bool) ([]models.Book, error)
 }
 
 type Server struct {
 	serv    *http.Server
 	valid   *validator.Validate
-	storage Storage
+	Storage Storage
 	delChan chan struct{}
 	ErrChan chan error
 }
@@ -51,7 +53,7 @@ func New(cfg config.Config, stor Storage) *Server {
 	return &Server{
 		serv:    &server,
 		valid:   valid,
-		storage: stor,
+		Storage: stor,
 		delChan: make(chan struct{}, 10), //nolint:mnd //todo
 		ErrChan: make(chan error),
 	}
@@ -64,16 +66,24 @@ func (s *Server) ShutdownServer() error {
 func (s *Server) Run(ctx context.Context) error {
 	log := logger.Get()
 	router := gin.Default()
+	router.Static("/uploads", "./uploads") // Подключаем каталог uploads как статический
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * 3600,
+	}))
 	router.GET("/", func(ctx *gin.Context) { ctx.String(http.StatusOK, "Hello") })
 	books := router.Group("/books")
 	{
-		books.GET("/:id", s.JWTAuthMiddleware(), s.bookInfo)
-		books.DELETE("/:id", s.JWTAuthMiddleware(), s.removeBook)
-		books.GET("/", s.JWTAuthMiddleware(), s.allBooks)
+		books.GET("/:id", s.BookInfo)
+		books.DELETE("/remove/:id", s.JWTAuthRoleMiddleware("admin"), s.RemoveBook)
+		books.GET("/", s.AllBooks)
+		books.GET("/search", s.AllBooksWithSearch)
 	}
-	router.POST("/add-book", s.JWTAuthRoleMiddleware("admin"), s.addBook)
-	router.POST("/add-books", s.JWTAuthRoleMiddleware("admin"), s.addBooks)
-	router.POST("/book-return", s.JWTAuthMiddleware(), s.bookReturn)
+	router.POST("/add-book", s.JWTAuthRoleMiddleware("admin"), s.AddBook)
 
 	s.serv.Handler = router
 	log.Debug().Msg("start delete listener")
@@ -138,9 +148,11 @@ func (s *Server) JWTAuthRoleMiddleware(roles ...string) gin.HandlerFunc {
 			return
 		}
 
+		fmt.Printf("Token parsed - Role: %s, UID: %s\n", Role, UID)
 		if len(roles) > 0 {
 			isAllowed := false
 			for _, allowedRole := range roles {
+				//if Role == allowedRole || Role == "user" {
 				if Role == allowedRole {
 					isAllowed = true
 					break
@@ -167,7 +179,7 @@ func validToken(tokenStr string) (string, string, error) {
 	if err != nil || !token.Valid {
 		return "", "", ErrInvalidToken
 	}
-	fmt.Printf("Role %s uid: %s \n", claims.Role, claims.UserID)
+	fmt.Printf("Role %s uid: %s\n", claims.Role, claims.UserID)
 
 	return claims.UserID, claims.Role, nil
 }

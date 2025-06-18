@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/azaliaz/bookly/cart-service/internal/domain/consts"
 	"github.com/azaliaz/bookly/cart-service/internal/domain/models"
 	"github.com/azaliaz/bookly/cart-service/internal/logger"
-	storerrros "github.com/azaliaz/bookly/cart-service/internal/storage/errors"
 	"github.com/golang-migrate/migrate/v4"
-
+	"github.com/google/uuid"
 	// "github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 )
@@ -28,57 +26,54 @@ func NewDB(ctx context.Context, addr string) (*DBStorage, error) {
 	}, nil
 }
 
-func (s *DBStorage) CreateCart(UID string) (string, error) {
-	var cartID int
-	// Убираем ctx, используем дефолтный контекст
-	err := s.conn.QueryRow(context.Background(), "INSERT INTO cart (user_id) VALUES ($1) RETURNING cart_id", UID).Scan(&cartID)
+func (s *DBStorage) AddBookToCart(cartID, BID string) error {
+	ctx := context.Background()
+	var exists bool
+
+	err := s.conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM books WHERE bid = $1)`, BID).Scan(&exists)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("failed to check if book exists: %v", err)
 	}
-	return fmt.Sprintf("%d", cartID), nil
-}
-func (s *DBStorage) AddBookToCart(cartID, BID string, quantity int) error {
-	// Проверка наличия книги в корзине
-	var existingQuantity int
-	err := s.conn.QueryRow(context.Background(), "SELECT quantity FROM cart_items WHERE cart_id = $1 AND book_id = $2", cartID, BID).Scan(&existingQuantity)
+	if !exists {
+		return fmt.Errorf("book with ID %s does not exist", BID)
+	}
 
-	// Проверка наличия книги в таблице books
-	var bookQuantity int
-	err = s.conn.QueryRow(context.Background(), "SELECT count FROM books WHERE bid = $1", BID).Scan(&bookQuantity)
+	err = s.conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM cart_items WHERE cart_id = $1 AND book_id = $2)", cartID, BID).Scan(&exists)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("book not found in books table")
-		}
-		return fmt.Errorf("failed to check book availability in books table: %v", err)
+		return fmt.Errorf("failed to check if book is in cart: %v", err)
+	}
+	if exists {
+		return nil
 	}
 
-	if bookQuantity < quantity {
-		return fmt.Errorf("not enough books in stock")
-	}
-
-	_, err = s.conn.Exec(context.Background(), "UPDATE books SET count = count - $1 WHERE bid = $2", quantity, BID)
+	itemID := uuid.New().String()
+	_, err = s.conn.Exec(ctx, `
+		INSERT INTO cart_items (item_id, cart_id, book_id) 
+		VALUES ($1, $2, $3)
+	`, itemID, cartID, BID)
 	if err != nil {
-		return fmt.Errorf("failed to update book quantity in books table: %v", err)
+		return fmt.Errorf("failed to insert book into cart: %v", err)
 	}
 
-	if err == nil && existingQuantity > 0 {
-		_, err = s.conn.Exec(context.Background(), "UPDATE cart_items SET quantity = quantity + $1 WHERE cart_id = $2 AND book_id = $3", quantity, cartID, BID)
-		if err != nil {
-			return fmt.Errorf("failed to update book quantity in cart: %v", err)
-		}
-	} else {
-
-		_, err := s.conn.Exec(context.Background(), "INSERT INTO cart_items (cart_id, book_id, quantity) VALUES ($1, $2, $3)", cartID, BID, quantity)
-		if err != nil {
-			return fmt.Errorf("failed to add book to cart: %v", err)
-		}
+	_, err = s.conn.Exec(ctx, `
+		UPDATE books
+		SET rating = (
+			SELECT COUNT(DISTINCT c.user_id)
+			FROM cart_items ci
+			JOIN cart c ON ci.cart_id = c.cart_id
+			WHERE ci.book_id = $1
+		)
+		WHERE bid = $1
+	`, BID)
+	if err != nil {
+		return fmt.Errorf("failed to update rating: %v", err)
 	}
 
 	return nil
 }
 
 func (s *DBStorage) GetCartItems(cartID string) ([]models.CartItem, error) {
-	rows, err := s.conn.Query(context.Background(), "SELECT item_id, cart_id, book_id, quantity FROM cart_items WHERE cart_id = $1", cartID)
+	rows, err := s.conn.Query(context.Background(), "SELECT item_id, cart_id, book_id FROM cart_items WHERE cart_id = $1", cartID)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +82,7 @@ func (s *DBStorage) GetCartItems(cartID string) ([]models.CartItem, error) {
 	var items []models.CartItem
 	for rows.Next() {
 		var item models.CartItem
-		if err := rows.Scan(&item.ItemID, &item.CartID, &item.BID, &item.Quantity); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.CartID, &item.BID); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -96,49 +91,30 @@ func (s *DBStorage) GetCartItems(cartID string) ([]models.CartItem, error) {
 }
 
 func (s *DBStorage) RemoveBookFromCart(itemID string) error {
-	log := logger.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), consts.DBCtxTimeout)
-	defer cancel()
+	ctx := context.Background()
 
-	var bookID, label, author, desc string
-	var age, quantity, count int
-
-	err := s.conn.QueryRow(ctx, `SELECT ci.book_id, b.lable, b.author, b."desc", b.age, ci.quantity, b.count
-		FROM cart_items ci 
-		LEFT JOIN books b ON ci.book_id = b.bid
-		WHERE ci.item_id = $1`, itemID).
-		Scan(&bookID, &label, &author, &desc, &age, &quantity, &count)
-
+	var bookID string
+	err := s.conn.QueryRow(ctx, `
+		SELECT book_id FROM cart_items WHERE item_id = $1
+	`, itemID).Scan(&bookID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return storerrros.ErrBookNotFound
-		}
-		return fmt.Errorf("failed to check book in cart: %w", err)
+		return fmt.Errorf("failed to find book_id for cart item: %v", err)
 	}
 
-	if quantity > 1 {
-
-		_, err := s.conn.Exec(ctx, "UPDATE cart_items SET quantity = quantity - 1 WHERE item_id = $1", itemID)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to decrement book quantity in cart")
-			return err
-		}
-	} else {
-
-		_, err = s.conn.Exec(ctx, "DELETE FROM cart_items WHERE item_id = $1", itemID)
-		if err != nil {
-			log.Error().Err(err).Str("itemID", itemID).Msg("Failed to delete book from cart")
-			return fmt.Errorf("failed to delete book from cart: %w", err)
-		}
-	}
-
-	_, err = s.conn.Exec(ctx, "UPDATE books SET count = count + 1 WHERE bid = $1", bookID)
+	_, err = s.conn.Exec(ctx, `
+		DELETE FROM cart_items WHERE item_id = $1
+	`, itemID)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to update book count in books")
-		return err
+		return fmt.Errorf("failed to remove item from cart: %v", err)
 	}
 
-	log.Debug().Str("itemID", itemID).Msg("Book removed from cart and returned to books")
+	_, err = s.conn.Exec(ctx, `
+		UPDATE books SET rating = rating - 1 WHERE bid = $1 AND rating > 0
+	`, bookID)
+	if err != nil {
+		return fmt.Errorf("failed to update book favorites count: %v", err)
+	}
+
 	return nil
 }
 

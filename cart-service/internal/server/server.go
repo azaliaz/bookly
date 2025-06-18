@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
 	"github.com/golang-jwt/jwt/v4"
@@ -26,8 +27,7 @@ type Claims struct {
 }
 
 type Storage interface {
-	CreateCart(userID string) (string, error)
-	AddBookToCart(cartID, bookID string, quantity int) error
+	AddBookToCart(cartID, bookID string) error
 	GetCartItems(string) ([]models.CartItem, error)
 	RemoveBookFromCart(string) error
 	ClearCart(string) error
@@ -62,6 +62,14 @@ func (s *Server) ShutdownServer() error {
 func (s *Server) Run(ctx context.Context) error {
 	log := logger.Get()
 	router := gin.Default()
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * 3600,
+	}))
 	cart := router.Group("/cart")
 	{
 		cart.GET("/:cart_id", s.JWTAuthMiddleware(), s.getCartItems)
